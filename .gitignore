@@ -1,5 +1,8 @@
 # ── Secretos y credenciales (NUNCA commitear) ─────────────────────────────
-credentials/
+# Ignora el contenido real, pero permite plantillas de ejemplo dentro de la carpeta.
+credentials/*
+!credentials/*.example
+!credentials/README.md
 *.pem
 *.key
 .env

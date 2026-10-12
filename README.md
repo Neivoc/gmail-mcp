@@ -71,6 +71,9 @@ pip install -r requirements.txt
    credentials/gcp-oauth.keys.json
    ```
 
+   Hay una plantilla en [`credentials/gcp-oauth.keys.json.example`](credentials/gcp-oauth.keys.json.example)
+   y más instrucciones en [`credentials/README.md`](credentials/README.md).
+
 ## Autenticación (una sola vez)
 
 ```bash
