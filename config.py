@@ -43,5 +43,34 @@ SEND_ENABLED = os.environ.get("GMAIL_MCP_ALLOW_SEND", "1").strip().lower() not i
     "off",
 }
 
+
+def _load_allowed_recipients() -> frozenset[str]:
+    """Allowlist de destinatarios para send_message/reply_message.
+
+    `GMAIL_MCP_ALLOWED_RECIPIENTS` = direcciones separadas por coma o espacio.
+    Si esta VACIA, se permite cualquier destinatario (comportamiento por defecto).
+    Si tiene valores, SOLO se puede enviar a esas direcciones: mitiga la
+    exfiltracion inducida por prompt injection al leer correo no confiable.
+    """
+    raw = os.environ.get("GMAIL_MCP_ALLOWED_RECIPIENTS", "").strip()
+    if not raw:
+        return frozenset()
+    return frozenset(a.lower() for a in raw.replace(",", " ").split() if a)
+
+
+ALLOWED_RECIPIENTS = _load_allowed_recipients()
+
 # Limite maximo de la API de Gmail para maxResults.
 MAX_RESULTS_CAP = 500
+
+# Tope de caracteres devueltos para body_html en get_message. El HTML de un
+# correo es contenido no confiable y puede ser enorme: truncarlo evita inflar
+# el contexto del modelo. Configurable con GMAIL_MCP_HTML_CAP.
+try:
+    BODY_HTML_CAP = int(os.environ.get("GMAIL_MCP_HTML_CAP", "200000"))
+except ValueError:
+    BODY_HTML_CAP = 200000
+
+# Registro de auditoria de acciones con efecto (envios, respuestas, papelera,
+# etiquetas). Append-only. El directorio state/ esta en .gitignore.
+AUDIT_LOG = BASE_DIR / "state" / "audit.log"

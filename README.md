@@ -18,10 +18,10 @@ enviar y organizar** correo mediante OAuth 2.0, sin exponer tu contraseña.
 | Tool | Descripción |
 | --- | --- |
 | `list_messages` | Lista/busca mensajes (sintaxis de Gmail: `is:unread`, `from:…`, `newer_than:2d`). Usa *batch* para los metadatos. |
-| `get_message` | Contenido completo: texto, HTML y metadatos de adjuntos. El cuerpo se marca como **contenido no confiable**. |
-| `send_message` | Envía un correo; soporta **HTML**. Desactivable con `GMAIL_MCP_ALLOW_SEND=0`. |
+| `get_message` | Contenido completo: texto, HTML y metadatos de adjuntos. El cuerpo se marca como **contenido no confiable** y el HTML se **acota** (`html_truncated`). |
+| `send_message` | Envía un correo; soporta **HTML**. Desactivable con `GMAIL_MCP_ALLOW_SEND=0` y limitable por **allowlist** de destinatarios. |
 | `create_draft` | Crea un **borrador** (no envía). Puede responder en un hilo con `in_reply_to`. |
-| `reply_message` | Responde en el hilo (`In-Reply-To`/`References`), respeta `Reply-To` y evita responderte a ti mismo. |
+| `reply_message` | Responde en el hilo (`In-Reply-To`/`References`), respeta `Reply-To` y evita responderte a ti mismo. Sujeto a la allowlist. |
 | `list_labels` | Lista las etiquetas de la cuenta. |
 | `modify_labels` | Añade/quita etiquetas (marcar leído, destacar, archivar…). |
 | `trash_message` | Mueve un mensaje a la papelera. |
@@ -98,6 +98,8 @@ Todo se centraliza en [`config.py`](config.py); no hace falta editar dos archivo
 | --- | --- | --- |
 | `GMAIL_MCP_SCOPES` | `gmail.modify gmail.send` | Scopes separados por espacio o coma. Para **solo lectura**: `https://www.googleapis.com/auth/gmail.readonly`. |
 | `GMAIL_MCP_ALLOW_SEND` | `1` | `0`/`false`/`no` bloquea `send_message` y `reply_message` (el resto sigue funcionando). |
+| `GMAIL_MCP_ALLOWED_RECIPIENTS` | *(vacío)* | **Allowlist de destinatarios** separados por coma/espacio. Vacío = cualquiera. Con valores, solo se puede enviar/responder a esas direcciones (defensa anti-exfiltración). |
+| `GMAIL_MCP_HTML_CAP` | `200000` | Tope de caracteres del `body_html` devuelto por `get_message` (el HTML se marca como truncado con `html_truncated`). |
 
 > Cambiar los scopes exige **volver a autenticar** (`python auth_setup.py`).
 > `gmail.modify` ya incluye lectura y etiquetas; `gmail.send` se añade por robustez.
@@ -146,20 +148,47 @@ No requieren credenciales ni conexión real a Gmail:
 ```
 
 `test_tools.py` cubre parseo de texto/HTML/adjuntos, *batch*, borradores, cabeceras de
-respuesta, `Reply-To`, la evitación de auto-respuesta y el bloqueo de envío.
+respuesta, `Reply-To`, la evitación de auto-respuesta, el bloqueo de envío, la
+**allowlist de destinatarios** y el rechazo de `to` vacío.
 `test_protocol.py` arranca el servidor como subproceso y habla MCP de verdad.
 
 ## Seguridad
 
+Este servidor expone un modelo de lenguaje a **datos no confiables** (el correo
+entrante) y a **acciones con efecto** (enviar, responder, borrar). El diseño asume
+ese modelo de amenazas — en particular la *indirect prompt injection* — y aplica
+defensas en capas:
+
+**Credenciales y transporte**
 - `credentials/` contiene secretos y está en `.gitignore`. **Nunca** lo compartas.
 - `token.json` se crea (y se reafirma tras cada refresh) con permisos `600`.
-- **Mínimo privilegio**: ajusta los scopes con `GMAIL_MCP_SCOPES` (p. ej. solo
-  `gmail.readonly` para lectura).
-- **Anti prompt-injection**: el cuerpo de los correos se marca como contenido no
-  confiable; usa `create_draft` y/o `GMAIL_MCP_ALLOW_SEND=0` para evitar envíos
-  inducidos por correos maliciosos.
+- El servidor es **local (stdio)**: no abre puertos ni endpoints de red.
 - Revoca el acceso cuando quieras desde <https://myaccount.google.com/permissions>.
-- El servidor es local (stdio): no abre puertos ni endpoints de red.
+
+**Mínimo privilegio**
+- Ajusta los scopes con `GMAIL_MCP_SCOPES` (p. ej. solo `gmail.readonly` para lectura).
+
+**Defensa anti prompt-injection** *(el núcleo del modelo de amenazas)*
+- **Contenido marcado como no confiable**: `get_message` devuelve
+  `untrusted_content: true`; su cuerpo nunca debe tratarse como instrucciones.
+- **`body_html` acotado** (`GMAIL_MCP_HTML_CAP`): el HTML se trunca y se marca con
+  `html_truncated`, para que un correo enorme/ofuscado no inunde el contexto.
+- **Envío desactivable**: `GMAIL_MCP_ALLOW_SEND=0` deja solo `create_draft` (un
+  humano revisa y envía) — corta la vía de que un correo malicioso induzca un envío.
+- **Allowlist de destinatarios** (`GMAIL_MCP_ALLOWED_RECIPIENTS`): aunque el envío
+  esté activo, limita a quién se puede escribir. Es la mitigación clave contra la
+  **exfiltración**: un correo con *prompt injection* no puede hacer que el servidor
+  mande datos a una dirección arbitraria del atacante.
+
+**Auditoría**
+- Toda acción con efecto (`send_message`, `reply_message`, `trash_message`,
+  `modify_labels`) se registra, append-only, en `state/audit.log` (JSON por línea,
+  con timestamp UTC). `state/` está en `.gitignore`. Permite saber **qué** hizo el
+  agente y **cuándo**.
+
+> **Recomendación para uso autónomo / semi-autónomo:** `GMAIL_MCP_ALLOW_SEND=0`
+> (solo borradores) **o** una `GMAIL_MCP_ALLOWED_RECIPIENTS` restringida a direcciones
+> de confianza, más scope `gmail.readonly` si solo necesitas leer.
 
 Ver [SECURITY.md](SECURITY.md).
 

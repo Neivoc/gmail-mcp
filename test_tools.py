@@ -180,6 +180,32 @@ async def main() -> int:
     assert got["status"] == "trashed", got
     print("[ok] trash_message ->", got["status"])
 
+    # Allowlist de destinatarios -------------------------------------------
+    server.ALLOWED_RECIPIENTS = frozenset({"bob@example.com"})
+    got = await call("send_message", {"to": "Bob <bob@example.com>", "subject": "s", "body": "b"})
+    assert got["status"] == "sent", got
+    print("[ok] allowlist -> permite destinatario en la lista")
+
+    try:
+        await server.mcp.call_tool("send_message", {"to": "mallory@evil.com", "subject": "s", "body": "b"})
+        raise AssertionError("deberia bloquear destinatario fuera de la allowlist")
+    except AssertionError:
+        raise
+    except Exception as exc:  # ToolError
+        assert "allowlist" in str(exc).lower(), exc
+    print("[ok] allowlist -> bloquea destinatario fuera de la lista")
+    server.ALLOWED_RECIPIENTS = frozenset()
+
+    # Destinatario vacio ----------------------------------------------------
+    try:
+        await server.mcp.call_tool("send_message", {"to": "   ", "subject": "s", "body": "b"})
+        raise AssertionError("deberia rechazar 'to' vacio")
+    except AssertionError:
+        raise
+    except Exception as exc:  # ToolError
+        assert "vacio" in str(exc).lower() or "destinatario" in str(exc).lower(), exc
+    print("[ok] send_message -> rechaza 'to' vacio")
+
     server.SEND_ENABLED = False
     try:
         await server.mcp.call_tool("send_message", {"to": "x@y.com", "subject": "s", "body": "b"})

@@ -11,7 +11,10 @@ envio (GMAIL_MCP_ALLOW_SEND).
 from __future__ import annotations
 
 import base64
+import json
+from datetime import datetime, timezone
 from email.message import EmailMessage
+from email.utils import getaddresses
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -19,7 +22,15 @@ from googleapiclient.discovery import build
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from config import MAX_RESULTS_CAP, SCOPES, SEND_ENABLED, TOKEN_FILE
+from config import (
+    ALLOWED_RECIPIENTS,
+    AUDIT_LOG,
+    BODY_HTML_CAP,
+    MAX_RESULTS_CAP,
+    SCOPES,
+    SEND_ENABLED,
+    TOKEN_FILE,
+)
 
 mcp = MCPServer("gmail")
 
@@ -56,6 +67,42 @@ def _ensure_send_allowed() -> None:
             "El envio esta desactivado (GMAIL_MCP_ALLOW_SEND=0). "
             "Usa create_draft, o habilita el envio para usar send_message/reply_message."
         )
+
+
+def _addresses_of(value: str) -> list[str]:
+    """Extrae las direcciones (sin display name) de un campo To/From, aceptando
+    varias separadas por coma. 'Ana <a@x.com>, b@y.com' -> ['a@x.com', 'b@y.com']."""
+    return [addr.lower() for _, addr in getaddresses([value or ""]) if addr]
+
+
+def _ensure_recipients_allowed(to: str) -> None:
+    """Si hay allowlist configurada, exige que TODOS los destinatarios esten en
+    ella. Defensa anti-exfiltracion ante prompt injection. Si la allowlist esta
+    vacia, no restringe (comportamiento por defecto)."""
+    recipients = _addresses_of(to)
+    if not recipients:
+        raise ToolError("No se reconocio ningun destinatario valido en 'to'.")
+    if not ALLOWED_RECIPIENTS:
+        return
+    blocked = [r for r in recipients if r not in ALLOWED_RECIPIENTS]
+    if blocked:
+        raise ToolError(
+            "Destinatario(s) fuera de la allowlist (GMAIL_MCP_ALLOWED_RECIPIENTS): "
+            f"{', '.join(blocked)}. Ajusta la allowlist o usa create_draft."
+        )
+
+
+def _audit(action: str, **fields) -> None:
+    """Registra una accion con efecto (append-only, best-effort). Nunca rompe la
+    tool si el log falla."""
+    try:
+        AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        entry = {"ts": datetime.now(timezone.utc).isoformat(), "action": action}
+        entry.update(fields)
+        with AUDIT_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -153,13 +200,21 @@ def _apply_reply_headers(msg: EmailMessage, service, message_id: str) -> str | N
     if not subject.lower().startswith("re:"):
         subject = f"Re: {subject}"
 
-    recipient = h.get("reply-to") or h.get("from", "")
-    if recipient and "@" in recipient and recipient.lower().endswith(
-        f"<{_my_email(service)}>"
-    ):
-        recipient = h.get("to", "")
-    if recipient.lower() == _my_email(service):
-        recipient = h.get("to", "")
+    def _addr(value: str) -> str:
+        addrs = _addresses_of(value)
+        return addrs[0] if addrs else ""
+
+    # Preferimos Reply-To; si resuelve a nuestra propia direccion (o no hay),
+    # respondemos a quien iba el original (To). Comparamos solo la direccion,
+    # no el display name, para no fallar con 'Nombre <addr>'.
+    recipient = _addr(h.get("reply-to") or h.get("from", ""))
+    if not recipient or recipient == _my_email(service):
+        recipient = _addr(h.get("to", ""))
+    if not recipient:
+        raise ToolError(
+            "No se pudo determinar un destinatario para la respuesta "
+            "(sin Reply-To/From/To validos)."
+        )
 
     msg["To"] = recipient
     msg["Subject"] = subject
@@ -225,6 +280,9 @@ def get_message(message_id: str) -> dict:
     payload = msg.get("payload", {})
     h = _headers(payload)
     text, html, attachments = _parse_payload(payload)
+    html_truncated = len(html) > BODY_HTML_CAP
+    if html_truncated:
+        html = html[:BODY_HTML_CAP]
     return {
         "id": msg.get("id"),
         "threadId": msg.get("threadId"),
@@ -235,6 +293,7 @@ def get_message(message_id: str) -> dict:
         "labels": msg.get("labelIds", []),
         "body": text,
         "body_html": html,
+        "html_truncated": html_truncated,
         "attachments": attachments,
         "untrusted_content": True,
     }
@@ -246,6 +305,9 @@ def send_message(to: str, subject: str, body: str, html: str = "") -> dict:
     Si pasas `html`, el correo lleva una version HTML (con `body` como texto plano).
     Puede desactivarse con GMAIL_MCP_ALLOW_SEND=0."""
     _ensure_send_allowed()
+    if not (to or "").strip():
+        raise ToolError("El destinatario 'to' no puede estar vacio.")
+    _ensure_recipients_allowed(to)
     service = gmail()
     msg = EmailMessage()
     msg["To"] = to
@@ -259,6 +321,7 @@ def send_message(to: str, subject: str, body: str, html: str = "") -> dict:
         .send(userId="me", body={"raw": _raw(msg)})
         .execute()
     )
+    _audit("send_message", to=to, subject=subject, id=sent.get("id"))
     return {"id": sent.get("id"), "threadId": sent.get("threadId"), "status": "sent"}
 
 
@@ -315,6 +378,7 @@ def reply_message(message_id: str, body: str, html: str = "") -> dict:
     if html:
         msg.add_alternative(html, subtype="html")
     thread_id = _apply_reply_headers(msg, service, message_id)
+    _ensure_recipients_allowed(msg["To"])
 
     sent = (
         service.users()
@@ -322,6 +386,7 @@ def reply_message(message_id: str, body: str, html: str = "") -> dict:
         .send(userId="me", body={"raw": _raw(msg), "threadId": thread_id})
         .execute()
     )
+    _audit("reply_message", to=msg["To"], in_reply_to=message_id, id=sent.get("id"))
     return {"id": sent.get("id"), "threadId": sent.get("threadId"), "status": "replied"}
 
 
@@ -354,6 +419,7 @@ def modify_labels(message_id: str, add: str = "", remove: str = "") -> dict:
         )
         .execute()
     )
+    _audit("modify_labels", id=message_id, add=add_ids, remove=remove_ids)
     return {"id": res.get("id"), "labels": res.get("labelIds", [])}
 
 
@@ -362,6 +428,7 @@ def trash_message(message_id: str) -> dict:
     """Mueve un mensaje a la papelera."""
     service = gmail()
     res = service.users().messages().trash(userId="me", id=message_id).execute()
+    _audit("trash_message", id=message_id)
     return {"id": res.get("id"), "status": "trashed"}
 
 

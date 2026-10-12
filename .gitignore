@@ -11,6 +11,9 @@ token.json
 gcp-oauth.keys.json
 *client_secret*.json
 
+# ── Estado en tiempo de ejecucion (audit log con destinatarios, etc.) ──────
+state/
+
 # ── Entorno virtual y caches de Python ─────────────────────────────────────
 .venv/
 venv/
