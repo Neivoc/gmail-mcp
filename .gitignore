@@ -1,0 +1,33 @@
+# ── Secretos y credenciales (NUNCA commitear) ─────────────────────────────
+credentials/
+*.pem
+*.key
+.env
+.env.*
+token.json
+gcp-oauth.keys.json
+*client_secret*.json
+
+# ── Entorno virtual y caches de Python ─────────────────────────────────────
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── Editores / SO ──────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
