@@ -24,8 +24,8 @@ async def main() -> int:
             print(f"[2] tools/list OK ({len(names)}): {names}")
 
             expected = {
-                "list_messages", "get_message", "send_message", "reply_message",
-                "list_labels", "modify_labels", "trash_message",
+                "list_messages", "get_message", "send_message", "create_draft",
+                "reply_message", "list_labels", "modify_labels", "trash_message",
             }
             missing = expected - set(names)
             if missing:

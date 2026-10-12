@@ -8,8 +8,12 @@ Este proyecto accede a tu cuenta de Gmail mediante OAuth 2.0. Ten en cuenta:
   `*client_secret*.json`, `token.json`, `gcp-oauth.keys.json`, `.env`, `*.pem` o
   `*.key`. El `.gitignore` ya los excluye.
 - `auth_setup.py` crea `token.json` con permisos `600`.
-- Usá el **principio de mínimo privilegio**: ajusta `SCOPES` en `auth_setup.py`
-  y `server.py` a lo que realmente necesites (por ejemplo, solo `gmail.readonly`).
+- **Mínimo privilegio**: los scopes se centralizan en [`config.py`](config.py) y se
+  pueden ajustar con la variable de entorno `GMAIL_MCP_SCOPES` (por ejemplo,
+  `https://www.googleapis.com/auth/gmail.readonly` para solo lectura).
+- **Envío controlado**: `send_message` y `reply_message` pueden desactivarse con
+  `GMAIL_MCP_ALLOW_SEND=0`. En ese modo queda disponible `create_draft` para
+  redactar sin enviar.
 - Revocá el acceso en cualquier momento desde
   <https://myaccount.google.com/permissions>.
 
